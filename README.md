@@ -29,7 +29,28 @@ A Streamlit web application for automating multimodal data collection workflows.
 pip install -r requirements.txt
 ```
 
-### 2. Configure Google Cloud
+**Note:** For audio validation, the app uses `mutagen` (recommended, no system dependencies) with `pydub` as a fallback. If you prefer using `pydub` exclusively, you may need to install `ffmpeg` separately on your system.
+
+### 2. Set Up Shared Folder (REQUIRED)
+
+**IMPORTANT**: Service accounts have very limited storage (15GB total across all service accounts). You MUST use a shared folder to avoid quota errors.
+
+1. **Create or choose a folder** in your Google Drive where you want files to be stored
+2. **Get your service account email**:
+   - Open `service_account_credentials.json`
+   - Find the `client_email` field (e.g., `your-service-account@project-id.iam.gserviceaccount.com`)
+3. **Share the folder**:
+   - Right-click the folder in Google Drive → "Share"
+   - Paste the service account email
+   - Give it "Editor" permissions
+   - Click "Send"
+4. **Get the folder ID**:
+   - Open the folder in Google Drive
+   - Look at the URL: `https://drive.google.com/drive/folders/FOLDER_ID_HERE`
+   - Copy the `FOLDER_ID_HERE` part
+5. **Add to config.json**: Set `shared_folder_id` to the folder ID you copied
+
+### 3. Configure Google Cloud
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project or select an existing one
@@ -44,7 +65,7 @@ pip install -r requirements.txt
    - Create a JSON key and download it
    - Save it as `service_account_credentials.json` in the project root
 
-### 3. Configure Application
+### 4. Configure Application
 
 Edit `config.json` to set your preferences:
 
@@ -53,14 +74,22 @@ Edit `config.json` to set your preferences:
   "team_name": "YourTeamName",
   "spreadsheet_name": "Sudan-MM-Metadata",
   "parent_folder_name": "Sudan-MM-Submission-YourTeamName",
+  "shared_folder_id": null,
   "service_account_file": "service_account_credentials.json"
 }
 ```
 
 **Important Notes:**
-- The `parent_folder_name` will be created in Google Drive if it doesn't exist
+- **Service Account Storage Quota**: Service accounts have very limited storage (15GB total). To avoid quota errors, you MUST share a Google Drive folder with your service account email and set `shared_folder_id` in the config.
+- **Setting up Shared Folder**:
+  1. Create a folder in your Google Drive (or use an existing one)
+  2. Right-click the folder → Share
+  3. Add your service account email (found in `service_account_credentials.json` as `client_email`)
+  4. Give it "Editor" permissions
+  5. Copy the folder ID from the URL (the long string after `/folders/`)
+  6. Set `shared_folder_id` in `config.json` to that folder ID
+- The `parent_folder_name` will be created inside the shared folder (or in service account's drive if no shared folder is set)
 - The spreadsheet will be created automatically if it doesn't exist
-- The service account must have access to create folders and files in Google Drive
 
 ## Running the Application
 
@@ -146,9 +175,11 @@ The metadata spreadsheet contains two tabs:
 - Ensure the Google Drive API is enabled in your Google Cloud project
 - Check that the service account has the necessary permissions
 
-### "Error creating folder"
-- Verify the service account has permission to create folders in Google Drive
-- Check that you haven't exceeded Google Drive storage limits
+### "Error creating folder" or "Storage quota exceeded"
+- **Most common issue**: Service accounts have limited storage. You MUST share a folder with the service account and set `shared_folder_id` in `config.json`
+- Verify the service account has permission to create folders in the shared folder
+- Check that the shared folder ID is correct in `config.json`
+- Ensure the folder is shared with the service account email (found in your credentials JSON file)
 
 ## Project Structure
 

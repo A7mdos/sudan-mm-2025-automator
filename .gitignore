@@ -1,3 +1,8 @@
+# OAuth and Service Account credentials
+oauth_credentials.json
+service_account_credentials.json
+token.pickle
+
 # Python
 __pycache__/
 *.py[cod]
@@ -26,11 +31,6 @@ wheels/
 # Streamlit
 .streamlit/
 
-# Credentials
-service_account_credentials.json
-*.json
-!config.json
-
 # IDE
 .vscode/
 .idea/
@@ -42,5 +42,7 @@ service_account_credentials.json
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# Temporary files
+*.tmp
+temp/
+tmp/

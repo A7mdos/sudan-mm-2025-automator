@@ -1,40 +1,73 @@
 """
-Google Sheets API integration module.
+Google Sheets API integration module using OAuth.
 Handles reading from and writing to Google Sheets.
 """
 
+import os
 import json
+import pickle
 from typing import Optional, List, Dict
-from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 
 class SheetsAPI:
-    """Wrapper class for Google Sheets API operations."""
+    """Wrapper class for Google Sheets API operations using OAuth."""
     
-    SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+    SCOPES = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive.file'
+    ]
     
-    def __init__(self, credentials_path: str):
+    def __init__(self, credentials_path: str, token_path: str = 'token.pickle'):
         """
-        Initialize Sheets API client.
+        Initialize Sheets API client with OAuth.
         
         Args:
-            credentials_path: Path to service account credentials JSON file
+            credentials_path: Path to OAuth credentials JSON file
+            token_path: Path to store the token file (shared with DriveAPI)
         """
         self.credentials_path = credentials_path
+        self.token_path = token_path
         self.service = self._authenticate()
     
     def _authenticate(self):
-        """Authenticate and return Sheets service object."""
-        try:
-            creds = service_account.Credentials.from_service_account_file(
-                self.credentials_path,
-                scopes=self.SCOPES
-            )
-            return build('sheets', 'v4', credentials=creds)
-        except Exception as e:
-            raise Exception(f"Failed to authenticate with Google Sheets: {str(e)}")
+        """Authenticate using OAuth and return Sheets service object."""
+        creds = None
+        
+        # Load token if it exists
+        if os.path.exists(self.token_path):
+            with open(self.token_path, 'rb') as token:
+                creds = pickle.load(token)
+        
+        # If no valid credentials, let user log in
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                except Exception as e:
+                    # If refresh fails, delete token and re-authenticate
+                    os.remove(self.token_path)
+                    creds = None
+            
+            if not creds:
+                try:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        self.credentials_path, self.SCOPES)
+                    creds = flow.run_local_server(port=0)
+                except Exception as e:
+                    raise Exception(
+                        f"Failed to authenticate. Make sure you have created OAuth credentials.\n"
+                        f"Error: {str(e)}"
+                    )
+            
+            # Save credentials for next run
+            with open(self.token_path, 'wb') as token:
+                pickle.dump(creds, token)
+        
+        return build('sheets', 'v4', credentials=creds)
     
     def find_spreadsheet_by_name(self, spreadsheet_name: str) -> Optional[str]:
         """
@@ -46,14 +79,15 @@ class SheetsAPI:
         Returns:
             Spreadsheet ID if found, None otherwise
         """
-        # Import here to avoid circular imports
-        from google.oauth2 import service_account
-        from googleapiclient.discovery import build
+        # Get credentials from the token
+        creds = None
+        if os.path.exists(self.token_path):
+            with open(self.token_path, 'rb') as token:
+                creds = pickle.load(token)
         
-        creds = service_account.Credentials.from_service_account_file(
-            self.credentials_path,
-            scopes=['https://www.googleapis.com/auth/drive']
-        )
+        if not creds:
+            raise Exception("Not authenticated. Please initialize DriveAPI first.")
+        
         drive_service = build('drive', 'v3', credentials=creds)
         query = f"name='{spreadsheet_name}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
         
@@ -81,10 +115,6 @@ class SheetsAPI:
         Returns:
             Spreadsheet ID
         """
-        # Import here to avoid circular imports
-        from google.oauth2 import service_account
-        from googleapiclient.discovery import build
-        
         # Create spreadsheet
         spreadsheet_body = {
             'properties': {
@@ -126,10 +156,14 @@ class SheetsAPI:
             
             # Move to parent folder if specified
             if parent_folder_id:
-                creds = service_account.Credentials.from_service_account_file(
-                    self.credentials_path,
-                    scopes=['https://www.googleapis.com/auth/drive']
-                )
+                creds = None
+                if os.path.exists(self.token_path):
+                    with open(self.token_path, 'rb') as token:
+                        creds = pickle.load(token)
+                
+                if not creds:
+                    raise Exception("Not authenticated. Please initialize DriveAPI first.")
+                
                 drive_service = build('drive', 'v3', credentials=creds)
                 
                 file = drive_service.files().get(

@@ -49,22 +49,38 @@ def load_config() -> Dict:
 
 
 def initialize_apis(config: Dict):
-    """Initialize Google Drive and Sheets API clients."""
-    credentials_path = config.get('service_account_file', 'service_account_credentials.json')
+    """Initialize Google Drive and Sheets API clients with OAuth."""
+    oauth_credentials_path = config.get('oauth_credentials_file', 'oauth_credentials.json')
     
-    if not os.path.exists(credentials_path):
-        st.error(f"Service account credentials file not found: {credentials_path}")
-        st.info("Please place your service_account_credentials.json file in the project root.")
+    if not os.path.exists(oauth_credentials_path):
+        st.error(f"OAuth credentials file not found: {oauth_credentials_path}")
+        st.info(
+            "Please download OAuth credentials from Google Cloud Console:\n\n"
+            "1. Go to APIs & Services → Credentials\n"
+            "2. Create OAuth 2.0 Client ID (Desktop app)\n"
+            "3. Download and save as 'oauth_credentials.json'\n\n"
+            "See OAUTH_SETUP_INSTRUCTIONS.md for detailed steps."
+        )
         st.stop()
     
     try:
-        # Initialize APIs
-        drive_api = DriveAPI(credentials_path)
-        sheets_api = SheetsAPI(credentials_path)
+        # Initialize APIs with OAuth
+        drive_api = DriveAPI(oauth_credentials_path)
+        sheets_api = SheetsAPI(oauth_credentials_path)
         
         # Set up folder structure
-        parent_folder_name = config.get('parent_folder_name', 'Sudan-MM-Submission-DefaultTeam')
-        folder_structure = drive_api.setup_folder_structure(parent_folder_name)
+        parent_folder_name = config.get('parent_folder_name', 'Sudan-MM-Submission-Zamanna')
+        parent_folder_id = config.get('parent_folder_id')
+        
+        if parent_folder_id and parent_folder_id.strip():
+            # Use existing folder
+            folder_structure = drive_api.setup_folder_structure(
+                parent_folder_name, 
+                parent_folder_id=parent_folder_id.strip()
+            )
+        else:
+            # Create new folder structure
+            folder_structure = drive_api.setup_folder_structure(parent_folder_name)
         
         # Get or create spreadsheet
         spreadsheet_name = config.get('spreadsheet_name', 'Sudan-MM-Metadata')
@@ -82,6 +98,11 @@ def initialize_apis(config: Dict):
         
     except Exception as e:
         st.error(f"Failed to initialize APIs: {str(e)}")
+        st.info(
+            "If this is your first time running the app, a browser window should open "
+            "for you to authorize the app. If you see a 'Google hasn't verified this app' "
+            "warning, click Advanced → Go to [App Name] (unsafe)."
+        )
         st.stop()
 
 
@@ -109,6 +130,44 @@ def save_uploaded_file(uploaded_file, suffix: str = "") -> Optional[str]:
         return None
 
 
+def safe_delete_file(file_path: str, max_retries: int = 3) -> bool:
+    """
+    Safely delete a file, handling cases where it might still be in use.
+    
+    Args:
+        file_path: Path to the file to delete
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    if not file_path or not os.path.exists(file_path):
+        return True
+    
+    import time
+    import gc
+    
+    for attempt in range(max_retries):
+        try:
+            # Force garbage collection to close any open file handles
+            gc.collect()
+            time.sleep(0.1)  # Small delay to allow file handles to close
+            os.unlink(file_path)
+            return True
+        except PermissionError:
+            if attempt < max_retries - 1:
+                time.sleep(0.5)  # Wait longer before retry
+                continue
+            # Last attempt failed, log but don't crash
+            print(f"Warning: Could not delete temporary file {file_path} after {max_retries} attempts")
+            return False
+        except Exception as e:
+            print(f"Warning: Error deleting file {file_path}: {str(e)}")
+            return False
+    
+    return False
+
+
 def main():
     """Main application function."""
     st.title("📸 Sudan-MM Data Collection Dashboard")
@@ -121,57 +180,59 @@ def main():
     if not st.session_state.initialized:
         with st.spinner("Initializing Google Drive and Sheets APIs..."):
             initialize_apis(config)
-        st.success("APIs initialized successfully!")
+        st.success("✅ APIs initialized successfully!")
+        st.info("Files will be uploaded to your Google Drive and logged in your spreadsheet.")
     
-    # Sidebar with configuration info
-    with st.sidebar:
-        st.header("Configuration")
-        st.info(f"**Team:** {config.get('team_name', 'N/A')}")
-        st.info(f"**Spreadsheet:** {config.get('spreadsheet_name', 'N/A')}")
-        st.info(f"**Parent Folder:** {config.get('parent_folder_name', 'N/A')}")
+    # Mode selection
+    st.divider()
+    mode = st.radio(
+        "Select Mode",
+        ["Image", "Video"],
+        horizontal=True,
+        help="Choose whether you're submitting an image or video"
+    )
     
-    # Main form
-    with st.form("upload_form", clear_on_submit=True):
-        st.header("Upload Multimodal Data")
+    # Create form
+    with st.form("submission_form", clear_on_submit=True):
+        st.subheader(f"📤 Upload {mode}")
         
-        # Mode selector
-        mode = st.radio(
-            "Select Mode:",
-            ["Image", "Video"],
-            horizontal=True
-        )
+        col1, col2 = st.columns(2)
         
-        # Media upload
-        if mode == "Image":
-            media_file = st.file_uploader(
-                "Upload Image",
-                type=['jpg', 'jpeg', 'png'],
-                help="Upload a .jpg, .jpeg, or .png image file"
+        with col1:
+            # Media file upload
+            if mode == "Image":
+                media_file = st.file_uploader(
+                    "Upload Image",
+                    type=['jpg', 'jpeg', 'png'],
+                    help="Supported formats: .jpg, .jpeg, .png"
+                )
+            else:
+                media_file = st.file_uploader(
+                    "Upload Video",
+                    type=['mp4'],
+                    help="Supported format: .mp4 (3-10 seconds)"
+                )
+        
+        with col2:
+            # Audio file upload
+            audio_file = st.file_uploader(
+                "Upload Audio Caption",
+                type=['mp3'],
+                help="Voice caption in .mp3 format (5-15 seconds)"
             )
-        else:
-            media_file = st.file_uploader(
-                "Upload Video",
-                type=['mp4'],
-                help="Upload a .mp4 video file (3-10 seconds)"
-            )
         
-        # Audio upload
-        audio_file = st.file_uploader(
-            "Upload Audio Caption",
-            type=['mp3'],
-            help="Upload a .mp3 audio file (5-15 seconds)"
-        )
+        # Text captions
+        st.subheader("✍️ Captions")
         
-        # Captions
-        st.subheader("Captions")
         msa_caption = st.text_area(
-            "MSA Caption (Modern Standard Arabic)",
-            placeholder="Enter the Modern Standard Arabic caption...",
+            "Modern Standard Arabic (MSA) Caption",
+            placeholder="Enter caption in Modern Standard Arabic...",
             height=100
         )
+        
         sudanese_caption = st.text_area(
             "Sudanese Arabic Caption",
-            placeholder="Enter the Sudanese Arabic caption...",
+            placeholder="Enter caption in Sudanese Arabic...",
             height=100
         )
         
@@ -237,19 +298,20 @@ def main():
                         )
                         if not is_valid:
                             st.error(f"Media validation error: {error_msg}")
-                            os.unlink(media_temp_path)
-                            os.unlink(audio_temp_path)
+                            safe_delete_file(media_temp_path)
+                            safe_delete_file(audio_temp_path)
                             return
                         
                         # Validate audio file format
                         is_valid, error_msg = validator.validate_audio_file(audio_temp_path)
                         if not is_valid:
                             st.error(f"Audio validation error: {error_msg}")
-                            os.unlink(media_temp_path)
-                            os.unlink(audio_temp_path)
+                            safe_delete_file(media_temp_path)
+                            safe_delete_file(audio_temp_path)
                             return
                         
-                        # Validate video duration
+                        # Validate video duration (close file handles after validation)
+                        video_clip = None
                         if mode == "Video":
                             is_valid, error_msg, duration = validator.validate_video_duration(
                                 media_temp_path,
@@ -258,8 +320,8 @@ def main():
                             )
                             if not is_valid:
                                 st.error(f"Video validation error: {error_msg}")
-                                os.unlink(media_temp_path)
-                                os.unlink(audio_temp_path)
+                                safe_delete_file(media_temp_path)
+                                safe_delete_file(audio_temp_path)
                                 return
                         
                         # Validate audio duration
@@ -270,8 +332,8 @@ def main():
                         )
                         if not is_valid:
                             st.error(f"Audio validation error: {error_msg}")
-                            os.unlink(media_temp_path)
-                            os.unlink(audio_temp_path)
+                            safe_delete_file(media_temp_path)
+                            safe_delete_file(audio_temp_path)
                             return
                         
                         # Generate next ID
@@ -329,8 +391,8 @@ def main():
                         sheets_api.append_row(spreadsheet_id, sheet_name, row_data)
                         
                         # Clean up temporary files
-                        os.unlink(media_temp_path)
-                        os.unlink(audio_temp_path)
+                        safe_delete_file(media_temp_path)
+                        safe_delete_file(audio_temp_path)
                         
                         # Success message
                         st.success(f"✅ Successfully uploaded {next_id}!")
@@ -349,10 +411,10 @@ def main():
                     except Exception as e:
                         st.error(f"Error processing submission: {str(e)}")
                         # Clean up temp files if they exist
-                        if 'media_temp_path' in locals() and os.path.exists(media_temp_path):
-                            os.unlink(media_temp_path)
-                        if 'audio_temp_path' in locals() and os.path.exists(audio_temp_path):
-                            os.unlink(audio_temp_path)
+                        if 'media_temp_path' in locals():
+                            safe_delete_file(media_temp_path)
+                        if 'audio_temp_path' in locals():
+                            safe_delete_file(audio_temp_path)
 
 
 if __name__ == "__main__":

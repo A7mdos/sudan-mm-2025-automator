@@ -5,8 +5,6 @@ Handles validation of video and audio durations.
 
 import os
 from typing import Tuple, Optional
-from moviepy.editor import VideoFileClip
-from pydub import AudioSegment
 
 
 class MediaValidator:
@@ -26,17 +24,35 @@ class MediaValidator:
             Tuple of (is_valid, error_message, duration)
         """
         try:
+            from moviepy.editor import VideoFileClip
+        except ImportError:
+            return False, "moviepy library is not installed. Please install it with: pip install moviepy", None
+        
+        video = None
+        try:
             video = VideoFileClip(file_path)
             duration = video.duration
-            video.close()
             
             if duration < min_seconds:
-                return False, f"Video duration ({duration:.2f}s) is less than minimum ({min_seconds}s)", duration
-            if duration > max_seconds:
-                return False, f"Video duration ({duration:.2f}s) exceeds maximum ({max_seconds}s)", duration
+                result = (False, f"Video duration ({duration:.2f}s) is less than minimum ({min_seconds}s)", duration)
+            elif duration > max_seconds:
+                result = (False, f"Video duration ({duration:.2f}s) exceeds maximum ({max_seconds}s)", duration)
+            else:
+                result = (True, None, duration)
             
-            return True, None, duration
+            # Ensure video is closed before returning
+            if video:
+                video.close()
+                video = None
+            
+            return result
         except Exception as e:
+            # Make sure to close video even on error
+            if video:
+                try:
+                    video.close()
+                except:
+                    pass
             return False, f"Error reading video file: {str(e)}", None
     
     @staticmethod
@@ -52,7 +68,32 @@ class MediaValidator:
         Returns:
             Tuple of (is_valid, error_message, duration)
         """
+        # Try mutagen first (pure Python, no ffmpeg required for MP3)
         try:
+            from mutagen.mp3 import MP3
+            from mutagen import File
+            
+            audio_file = File(file_path)
+            if audio_file is not None:
+                duration = audio_file.info.length
+                
+                if duration < min_seconds:
+                    return False, f"Audio duration ({duration:.2f}s) is less than minimum ({min_seconds}s)", duration
+                if duration > max_seconds:
+                    return False, f"Audio duration ({duration:.2f}s) exceeds maximum ({max_seconds}s)", duration
+                
+                return True, None, duration
+        except ImportError:
+            # Fallback to pydub if mutagen is not available
+            pass
+        except Exception as e:
+            # If mutagen fails, try pydub as fallback
+            pass
+        
+        # Fallback to pydub
+        try:
+            from pydub import AudioSegment
+            
             audio = AudioSegment.from_file(file_path)
             duration = len(audio) / 1000.0  # Convert milliseconds to seconds
             
@@ -62,6 +103,8 @@ class MediaValidator:
                 return False, f"Audio duration ({duration:.2f}s) exceeds maximum ({max_seconds}s)", duration
             
             return True, None, duration
+        except ImportError:
+            return False, "Neither mutagen nor pydub library is installed. Please install one with: pip install mutagen (recommended) or pip install pydub", None
         except Exception as e:
             return False, f"Error reading audio file: {str(e)}", None
     
