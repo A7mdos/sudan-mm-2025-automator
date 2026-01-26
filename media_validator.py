@@ -1,9 +1,11 @@
 """
 Media validation module.
-Handles validation of video and audio durations.
+Handles validation of video and audio durations using ffmpeg-python.
 """
 
 import os
+import subprocess
+import json
 from typing import Tuple, Optional
 
 
@@ -11,9 +13,52 @@ class MediaValidator:
     """Class for validating media file durations."""
     
     @staticmethod
+    def _get_media_duration_ffprobe(file_path: str) -> Optional[float]:
+        """
+        Get media duration using ffprobe (part of ffmpeg).
+        
+        Args:
+            file_path: Path to the media file
+            
+        Returns:
+            Duration in seconds, or None if error
+        """
+        try:
+            # Use ffprobe to get duration
+            cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'json',
+                file_path
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                duration_str = data.get('format', {}).get('duration')
+                if duration_str:
+                    return float(duration_str)
+            
+            return None
+            
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+            return None
+        except FileNotFoundError:
+            # ffprobe not found
+            return None
+    
+    @staticmethod
     def validate_video_duration(file_path: str, min_seconds: float = 3.0, max_seconds: float = 10.0) -> Tuple[bool, Optional[str], Optional[float]]:
         """
-        Validate video duration.
+        Validate video duration using ffprobe.
         
         Args:
             file_path: Path to the video file
@@ -23,36 +68,35 @@ class MediaValidator:
         Returns:
             Tuple of (is_valid, error_message, duration)
         """
+        # First check if ffprobe is available
         try:
-            from moviepy.editor import VideoFileClip
-        except ImportError:
-            return False, "moviepy library is not installed. Please install it with: pip install moviepy", None
+            subprocess.run(['ffprobe', '-version'], 
+                         stdout=subprocess.PIPE, 
+                         stderr=subprocess.PIPE,
+                         timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False, (
+                "ffprobe (part of ffmpeg) is not installed or not in PATH. "
+                "Please install ffmpeg:\n"
+                "- Windows: Download from https://ffmpeg.org/download.html or use 'choco install ffmpeg'\n"
+                "- Mac: brew install ffmpeg\n"
+                "- Linux: sudo apt-get install ffmpeg"
+            ), None
         
-        video = None
         try:
-            video = VideoFileClip(file_path)
-            duration = video.duration
+            duration = MediaValidator._get_media_duration_ffprobe(file_path)
+            
+            if duration is None:
+                return False, "Could not read video duration. The file may be corrupted.", None
             
             if duration < min_seconds:
-                result = (False, f"Video duration ({duration:.2f}s) is less than minimum ({min_seconds}s)", duration)
+                return False, f"Video duration ({duration:.2f}s) is less than minimum ({min_seconds}s)", duration
             elif duration > max_seconds:
-                result = (False, f"Video duration ({duration:.2f}s) exceeds maximum ({max_seconds}s)", duration)
+                return False, f"Video duration ({duration:.2f}s) exceeds maximum ({max_seconds}s)", duration
             else:
-                result = (True, None, duration)
-            
-            # Ensure video is closed before returning
-            if video:
-                video.close()
-                video = None
-            
-            return result
+                return True, None, duration
+                
         except Exception as e:
-            # Make sure to close video even on error
-            if video:
-                try:
-                    video.close()
-                except:
-                    pass
             return False, f"Error reading video file: {str(e)}", None
     
     @staticmethod
@@ -84,18 +128,21 @@ class MediaValidator:
                 
                 return True, None, duration
         except ImportError:
-            # Fallback to pydub if mutagen is not available
+            # Fallback to ffprobe if mutagen is not available
             pass
         except Exception as e:
-            # If mutagen fails, try pydub as fallback
+            # If mutagen fails, try ffprobe as fallback
             pass
         
-        # Fallback to pydub
+        # Fallback to ffprobe
         try:
-            from pydub import AudioSegment
+            duration = MediaValidator._get_media_duration_ffprobe(file_path)
             
-            audio = AudioSegment.from_file(file_path)
-            duration = len(audio) / 1000.0  # Convert milliseconds to seconds
+            if duration is None:
+                return False, (
+                    "Could not read audio duration. Please install mutagen (pip install mutagen) "
+                    "or ensure ffmpeg is installed on your system."
+                ), None
             
             if duration < min_seconds:
                 return False, f"Audio duration ({duration:.2f}s) is less than minimum ({min_seconds}s)", duration
@@ -103,8 +150,7 @@ class MediaValidator:
                 return False, f"Audio duration ({duration:.2f}s) exceeds maximum ({max_seconds}s)", duration
             
             return True, None, duration
-        except ImportError:
-            return False, "Neither mutagen nor pydub library is installed. Please install one with: pip install mutagen (recommended) or pip install pydub", None
+            
         except Exception as e:
             return False, f"Error reading audio file: {str(e)}", None
     
