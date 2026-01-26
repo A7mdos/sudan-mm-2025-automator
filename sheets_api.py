@@ -1,6 +1,7 @@
 """
 Google Sheets API integration module using OAuth.
 Handles reading from and writing to Google Sheets.
+Works with both local token files and Streamlit secrets.
 """
 
 import os
@@ -21,51 +22,69 @@ class SheetsAPI:
         'https://www.googleapis.com/auth/drive.file'
     ]
     
-    def __init__(self, credentials_path: str, token_path: str = 'token.pickle'):
+    def __init__(self, credentials_path: str = None, token_path: str = 'token.pickle',
+                 credentials_dict: Dict = None, token_dict: Dict = None):
         """
         Initialize Sheets API client with OAuth.
         
         Args:
-            credentials_path: Path to OAuth credentials JSON file
-            token_path: Path to store the token file (shared with DriveAPI)
+            credentials_path: Path to OAuth credentials JSON file (for local)
+            token_path: Path to store the token file (for local)
+            credentials_dict: OAuth credentials as dict (for Streamlit Cloud)
+            token_dict: Token data as dict (for Streamlit Cloud)
         """
         self.credentials_path = credentials_path
         self.token_path = token_path
+        self.credentials_dict = credentials_dict
+        self.token_dict = token_dict
         self.service = self._authenticate()
     
     def _authenticate(self):
         """Authenticate using OAuth and return Sheets service object."""
         creds = None
         
-        # Load token if it exists
-        if os.path.exists(self.token_path):
-            with open(self.token_path, 'rb') as token:
-                creds = pickle.load(token)
+        # Try loading from Streamlit secrets first (deployment)
+        if self.token_dict:
+            try:
+                # Token provided as dict from Streamlit secrets
+                from google.oauth2.credentials import Credentials
+                creds = Credentials.from_authorized_user_info(self.token_dict, self.SCOPES)
+            except Exception as e:
+                raise Exception(f"Failed to load credentials from secrets: {str(e)}")
+        # Try loading from file (local development)
+        elif os.path.exists(self.token_path):
+            try:
+                with open(self.token_path, 'rb') as token:
+                    creds = pickle.load(token)
+            except Exception as e:
+                raise Exception(f"Failed to load token from file: {str(e)}")
         
-        # If no valid credentials, let user log in
+        # If no valid credentials, try to refresh
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
+                    # Save refreshed token
+                    if self.token_path and not self.token_dict:
+                        with open(self.token_path, 'wb') as token:
+                            pickle.dump(creds, token)
                 except Exception as e:
-                    # If refresh fails, delete token and re-authenticate
-                    os.remove(self.token_path)
-                    creds = None
-            
-            if not creds:
-                try:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        self.credentials_path, self.SCOPES)
-                    creds = flow.run_local_server(port=0)
-                except Exception as e:
+                    # If refresh fails in deployment, raise clear error
+                    if self.token_dict:
+                        raise Exception(
+                            "Token expired and could not be refreshed. "
+                            "Please run the token refresh script locally and update Streamlit secrets."
+                        )
+                    # If refresh fails locally, we can't re-authenticate from here
+                    raise Exception(f"Authentication failed: {str(e)}")
+            else:
+                # No valid credentials available
+                if self.token_dict:
                     raise Exception(
-                        f"Failed to authenticate. Make sure you have created OAuth credentials.\n"
-                        f"Error: {str(e)}"
+                        "No valid token found. Please run the app locally to authenticate, "
+                        "then update the token in Streamlit secrets."
                     )
-            
-            # Save credentials for next run
-            with open(self.token_path, 'wb') as token:
-                pickle.dump(creds, token)
+                raise Exception("Not authenticated. Please initialize DriveAPI first.")
         
         return build('sheets', 'v4', credentials=creds)
     
@@ -81,7 +100,10 @@ class SheetsAPI:
         """
         # Get credentials from the token
         creds = None
-        if os.path.exists(self.token_path):
+        if self.token_dict:
+            from google.oauth2.credentials import Credentials
+            creds = Credentials.from_authorized_user_info(self.token_dict, self.SCOPES)
+        elif os.path.exists(self.token_path):
             with open(self.token_path, 'rb') as token:
                 creds = pickle.load(token)
         
@@ -157,7 +179,10 @@ class SheetsAPI:
             # Move to parent folder if specified
             if parent_folder_id:
                 creds = None
-                if os.path.exists(self.token_path):
+                if self.token_dict:
+                    from google.oauth2.credentials import Credentials
+                    creds = Credentials.from_authorized_user_info(self.token_dict, self.SCOPES)
+                elif os.path.exists(self.token_path):
                     with open(self.token_path, 'rb') as token:
                         creds = pickle.load(token)
                 

@@ -1,11 +1,13 @@
 """
 Google Drive API integration module using OAuth.
 Handles authentication, folder creation, and file uploads.
+Works with both local token files and Streamlit secrets.
 """
 
 import os
 import json
 import pickle
+import base64
 from typing import Optional, Dict
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -19,56 +21,100 @@ class DriveAPI:
     
     SCOPES = ['https://www.googleapis.com/auth/drive.file']
     
-    def __init__(self, credentials_path: str, token_path: str = 'token.pickle'):
+    def __init__(self, credentials_path: str = None, token_path: str = 'token.pickle', 
+                 credentials_dict: Dict = None, token_dict: Dict = None):
         """
         Initialize Drive API client with OAuth.
         
         Args:
-            credentials_path: Path to OAuth credentials JSON file (from Google Cloud Console)
-            token_path: Path to store the token file (persists login across sessions)
+            credentials_path: Path to OAuth credentials JSON file (for local)
+            token_path: Path to store the token file (for local)
+            credentials_dict: OAuth credentials as dict (for Streamlit Cloud)
+            token_dict: Token data as dict (for Streamlit Cloud)
         """
         self.credentials_path = credentials_path
         self.token_path = token_path
+        self.credentials_dict = credentials_dict
+        self.token_dict = token_dict
         self.service = self._authenticate()
     
     def _authenticate(self):
         """Authenticate using OAuth and return Drive service object."""
         creds = None
         
-        # Load token if it exists
-        if os.path.exists(self.token_path):
-            with open(self.token_path, 'rb') as token:
-                creds = pickle.load(token)
+        # Try loading from Streamlit secrets first (deployment)
+        if self.token_dict:
+            try:
+                # Token provided as dict from Streamlit secrets
+                from google.oauth2.credentials import Credentials
+                creds = Credentials.from_authorized_user_info(self.token_dict, self.SCOPES)
+            except Exception as e:
+                raise Exception(f"Failed to load credentials from secrets: {str(e)}")
+        # Try loading from file (local development)
+        elif os.path.exists(self.token_path):
+            try:
+                with open(self.token_path, 'rb') as token:
+                    creds = pickle.load(token)
+            except Exception as e:
+                raise Exception(f"Failed to load token from file: {str(e)}")
         
-        # If no valid credentials, let user log in
+        # If no valid credentials, try to refresh or re-authenticate
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
+                    # Save refreshed token
+                    if self.token_path and not self.token_dict:
+                        with open(self.token_path, 'wb') as token:
+                            pickle.dump(creds, token)
                 except Exception as e:
-                    # If refresh fails, delete token and re-authenticate
-                    os.remove(self.token_path)
+                    # If refresh fails in deployment, raise clear error
+                    if self.token_dict:
+                        raise Exception(
+                            "Token expired and could not be refreshed. "
+                            "Please run the token refresh script locally and update Streamlit secrets."
+                        )
+                    # If refresh fails locally, delete token and re-authenticate
+                    if os.path.exists(self.token_path):
+                        os.remove(self.token_path)
                     creds = None
             
+            # Re-authenticate (only works locally, not on deployed server)
             if not creds:
+                if self.token_dict:
+                    # We're in deployment mode, can't re-authenticate
+                    raise Exception(
+                        "No valid token found. Please run the app locally to authenticate, "
+                        "then update the token in Streamlit secrets."
+                    )
+                
+                # Local mode - try to authenticate
+                if not self.credentials_path and not self.credentials_dict:
+                    raise Exception("No credentials provided for authentication")
+                
                 try:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        self.credentials_path, self.SCOPES)
+                    if self.credentials_dict:
+                        # Create temp file from credentials dict
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                            json.dump(self.credentials_dict, f)
+                            temp_creds_path = f.name
+                        flow = InstalledAppFlow.from_client_secrets_file(temp_creds_path, self.SCOPES)
+                        os.unlink(temp_creds_path)
+                    else:
+                        flow = InstalledAppFlow.from_client_secrets_file(self.credentials_path, self.SCOPES)
+                    
                     creds = flow.run_local_server(port=0)
                 except Exception as e:
                     raise Exception(
                         f"Failed to authenticate. Make sure you have created OAuth credentials.\n"
-                        f"Error: {str(e)}\n\n"
-                        f"Instructions:\n"
-                        f"1. Go to Google Cloud Console\n"
-                        f"2. APIs & Services → Credentials\n"
-                        f"3. Create OAuth 2.0 Client ID (Desktop app)\n"
-                        f"4. Download and save as 'oauth_credentials.json'"
+                        f"Error: {str(e)}"
                     )
-            
-            # Save credentials for next run
-            with open(self.token_path, 'wb') as token:
-                pickle.dump(creds, token)
+                
+                # Save credentials for next run
+                if self.token_path:
+                    with open(self.token_path, 'wb') as token:
+                        pickle.dump(creds, token)
         
         return build('drive', 'v3', credentials=creds)
     

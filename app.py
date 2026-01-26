@@ -1,6 +1,7 @@
 """
 Sudan-MM-2025 Automator
 Streamlit web application for multimodal data collection workflow.
+Deployment-ready version with Streamlit secrets support.
 """
 
 import streamlit as st
@@ -36,12 +37,20 @@ if 'spreadsheet_id' not in st.session_state:
 
 
 def load_config() -> Dict:
-    """Load configuration from config.json."""
+    """Load configuration from config.json or Streamlit secrets."""
+    # Try Streamlit secrets first (deployment)
+    try:
+        if hasattr(st, 'secrets') and 'config' in st.secrets:
+            return dict(st.secrets['config'])
+    except:
+        pass
+    
+    # Fall back to config.json (local development)
     try:
         with open('config.json', 'r') as f:
             return json.load(f)
     except FileNotFoundError:
-        st.error("config.json not found. Please create it with your settings.")
+        st.error("config.json not found and no secrets configured.")
         st.stop()
     except json.JSONDecodeError:
         st.error("Invalid JSON in config.json.")
@@ -50,24 +59,66 @@ def load_config() -> Dict:
 
 def initialize_apis(config: Dict):
     """Initialize Google Drive and Sheets API clients with OAuth."""
-    oauth_credentials_path = config.get('oauth_credentials_file', 'oauth_credentials.json')
     
-    if not os.path.exists(oauth_credentials_path):
-        st.error(f"OAuth credentials file not found: {oauth_credentials_path}")
-        st.info(
-            "Please download OAuth credentials from Google Cloud Console:\n\n"
-            "1. Go to APIs & Services → Credentials\n"
-            "2. Create OAuth 2.0 Client ID (Desktop app)\n"
-            "3. Download and save as 'oauth_credentials.json'\n\n"
-            "See OAUTH_SETUP_INSTRUCTIONS.md for detailed steps."
-        )
-        st.stop()
+    # Check if we're running on Streamlit Cloud (secrets available)
+    use_secrets = hasattr(st, 'secrets') and 'oauth_credentials' in st.secrets and 'token' in st.secrets
+    
+    if use_secrets:
+        # Deployment mode - use secrets
+        try:
+            oauth_creds_dict = dict(st.secrets['oauth_credentials'])
+            token_dict = dict(st.secrets['token'])
+            
+            # Initialize APIs with secrets
+            drive_api = DriveAPI(
+                credentials_dict=oauth_creds_dict,
+                token_dict=token_dict
+            )
+            sheets_api = SheetsAPI(
+                credentials_dict=oauth_creds_dict,
+                token_dict=token_dict
+            )
+            
+        except Exception as e:
+            st.error(f"Failed to initialize with secrets: {str(e)}")
+            st.info(
+                "**Token may have expired!**\n\n"
+                "To fix this:\n"
+                "1. Run `python refresh_token.py` locally\n"
+                "2. Copy the new token content\n"
+                "3. Update the `token` secret in Streamlit Cloud settings\n"
+                "4. Restart the app"
+            )
+            st.stop()
+    else:
+        # Local mode - use files
+        oauth_credentials_path = config.get('oauth_credentials_file', 'oauth_credentials.json')
+        
+        if not os.path.exists(oauth_credentials_path):
+            st.error(f"OAuth credentials file not found: {oauth_credentials_path}")
+            st.info(
+                "Please download OAuth credentials from Google Cloud Console:\n\n"
+                "1. Go to APIs & Services → Credentials\n"
+                "2. Create OAuth 2.0 Client ID (Desktop app)\n"
+                "3. Download and save as 'oauth_credentials.json'"
+            )
+            st.stop()
+        
+        try:
+            # Initialize APIs with OAuth files
+            drive_api = DriveAPI(oauth_credentials_path)
+            sheets_api = SheetsAPI(oauth_credentials_path)
+            
+        except Exception as e:
+            st.error(f"Failed to initialize APIs: {str(e)}")
+            st.info(
+                "If this is your first time running the app, a browser window should open "
+                "for you to authorize the app. If you see a 'Google hasn't verified this app' "
+                "warning, click Advanced → Go to [App Name] (unsafe)."
+            )
+            st.stop()
     
     try:
-        # Initialize APIs with OAuth
-        drive_api = DriveAPI(oauth_credentials_path)
-        sheets_api = SheetsAPI(oauth_credentials_path)
-        
         # Set up folder structure
         parent_folder_name = config.get('parent_folder_name', 'Sudan-MM-Submission-Zamanna')
         parent_folder_id = config.get('parent_folder_id')
@@ -97,12 +148,7 @@ def initialize_apis(config: Dict):
         st.session_state.initialized = True
         
     except Exception as e:
-        st.error(f"Failed to initialize APIs: {str(e)}")
-        st.info(
-            "If this is your first time running the app, a browser window should open "
-            "for you to authorize the app. If you see a 'Google hasn't verified this app' "
-            "warning, click Advanced → Go to [App Name] (unsafe)."
-        )
+        st.error(f"Failed to set up folders/spreadsheet: {str(e)}")
         st.stop()
 
 
@@ -181,7 +227,7 @@ def main():
         with st.spinner("Initializing Google Drive and Sheets APIs..."):
             initialize_apis(config)
         st.success("✅ APIs initialized successfully!")
-        st.info("Files will be uploaded to your Google Drive and logged in your spreadsheet.")
+        st.info("Files will be uploaded to Google Drive and logged in the spreadsheet.")
     
     # Mode selection
     st.divider()
