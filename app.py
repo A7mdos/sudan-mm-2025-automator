@@ -14,6 +14,7 @@ from typing import Optional, Dict
 from drive_api import DriveAPI
 from sheets_api import SheetsAPI
 from media_validator import MediaValidator
+from st_audiorec import st_audiorec
 
 
 # Page configuration
@@ -36,6 +37,8 @@ if 'spreadsheet_id' not in st.session_state:
     st.session_state.spreadsheet_id = None
 if 'username' not in st.session_state:
     st.session_state.username = None
+if 'recorded_audio' not in st.session_state:
+    st.session_state.recorded_audio = None
 
 
 def load_config() -> Dict:
@@ -179,6 +182,17 @@ def save_uploaded_file(uploaded_file, suffix: str = "") -> Optional[str]:
         return None
 
 
+def save_bytes_to_temp(data: bytes, suffix: str = ".wav") -> Optional[str]:
+    """Save raw bytes to a temporary file."""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+            tmp_file.write(data)
+            return tmp_file.name
+    except Exception as e:
+        st.error(f"Error saving recorded audio: {str(e)}")
+        return None
+
+
 def safe_delete_file(file_path: str, max_retries: int = 3) -> bool:
     """
     Safely delete a file, handling cases where it might still be in use.
@@ -266,29 +280,56 @@ def main():
         help="Choose whether you're submitting an image or video"
     )
     
-    # Create form
+    st.subheader(f"📤 Upload {mode}")
+    
+    # --- Audio Caption Section (outside form because recorder is a custom component) ---
+    st.markdown("#### 🎙️ Audio Caption")
+    audio_method = st.radio(
+        "How would you like to provide the audio caption?",
+        ["Record in app", "Upload file"],
+        horizontal=True,
+        help="Record directly using your microphone, or upload an existing MP3 file"
+    )
+    
+    audio_file = None  # For uploaded file
+    
+    if audio_method == "Record in app":
+        st.info("Click the microphone to start recording (5-15 seconds)")
+        wav_audio_data = st_audiorec()
+        
+        if wav_audio_data is not None:
+            st.session_state.recorded_audio = wav_audio_data
+            st.success("Audio recorded! You can preview it above.")
+        
+        # Show status
+        if st.session_state.recorded_audio is not None:
+            st.caption("✅ Audio recording ready for submission")
+        else:
+            st.caption("⏳ Waiting for recording...")
+    else:
+        # Clear any previous recording when switching to upload mode
+        st.session_state.recorded_audio = None
+    
+    st.divider()
+    
+    # --- Main Submission Form ---
     with st.form("submission_form", clear_on_submit=True):
-        st.subheader(f"📤 Upload {mode}")
+        # Media file upload
+        if mode == "Image":
+            media_file = st.file_uploader(
+                "Upload Image",
+                type=['jpg', 'jpeg', 'png'],
+                help="Supported formats: .jpg, .jpeg, .png"
+            )
+        else:
+            media_file = st.file_uploader(
+                "Upload Video",
+                type=['mp4'],
+                help="Supported format: .mp4 (3-10 seconds)"
+            )
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Media file upload
-            if mode == "Image":
-                media_file = st.file_uploader(
-                    "Upload Image",
-                    type=['jpg', 'jpeg', 'png'],
-                    help="Supported formats: .jpg, .jpeg, .png"
-                )
-            else:
-                media_file = st.file_uploader(
-                    "Upload Video",
-                    type=['mp4'],
-                    help="Supported format: .mp4 (3-10 seconds)"
-                )
-        
-        with col2:
-            # Audio file upload
+        # Audio file upload (only shown if upload method is selected)
+        if audio_method == "Upload file":
             audio_file = st.file_uploader(
                 "Upload Audio Caption",
                 type=['mp3'],
@@ -333,13 +374,19 @@ def main():
         submitted = st.form_submit_button("Submit", use_container_width=True)
         
         if submitted:
+            # Determine audio source
+            has_recorded = st.session_state.recorded_audio is not None
+            has_uploaded = audio_file is not None
+            
             # Validation
             errors = []
             
             # Check required fields
             if not media_file:
                 errors.append("Please upload a media file")
-            if not audio_file:
+            if audio_method == "Record in app" and not has_recorded:
+                errors.append("Please record an audio caption first")
+            if audio_method == "Upload file" and not has_uploaded:
                 errors.append("Please upload an audio file")
             if not msa_caption.strip():
                 errors.append("MSA caption is required")
@@ -355,10 +402,19 @@ def main():
                 # Process submission
                 with st.spinner("Processing submission..."):
                     try:
-                        # Save uploaded files temporarily
+                        # Save media file temporarily
                         media_ext = Path(media_file.name).suffix
                         media_temp_path = save_uploaded_file(media_file, media_ext)
-                        audio_temp_path = save_uploaded_file(audio_file, '.mp3')
+                        
+                        # Save audio file temporarily (from recording or upload)
+                        if audio_method == "Record in app" and has_recorded:
+                            audio_ext = ".wav"
+                            audio_temp_path = save_bytes_to_temp(
+                                st.session_state.recorded_audio, ".wav"
+                            )
+                        else:
+                            audio_ext = ".mp3"
+                            audio_temp_path = save_uploaded_file(audio_file, '.mp3')
                         
                         if not media_temp_path or not audio_temp_path:
                             st.error("Failed to save uploaded files")
@@ -376,16 +432,18 @@ def main():
                             safe_delete_file(audio_temp_path)
                             return
                         
-                        # Validate audio file format
-                        is_valid, error_msg = validator.validate_audio_file(audio_temp_path)
-                        if not is_valid:
-                            st.error(f"Audio validation error: {error_msg}")
-                            safe_delete_file(media_temp_path)
-                            safe_delete_file(audio_temp_path)
-                            return
+                        # Validate audio file format (skip for in-app recordings)
+                        if audio_method == "Upload file":
+                            is_valid, error_msg = validator.validate_audio_file(
+                                audio_temp_path
+                            )
+                            if not is_valid:
+                                st.error(f"Audio validation error: {error_msg}")
+                                safe_delete_file(media_temp_path)
+                                safe_delete_file(audio_temp_path)
+                                return
                         
-                        # Validate video duration (close file handles after validation)
-                        video_clip = None
+                        # Validate video duration
                         if mode == "Video":
                             is_valid, error_msg, duration = validator.validate_video_duration(
                                 media_temp_path,
@@ -415,7 +473,7 @@ def main():
                         
                         # Rename files with ID
                         media_new_name = f"{next_id}{media_ext}"
-                        audio_new_name = f"{next_id}.mp3"
+                        audio_new_name = f"{next_id}{audio_ext}"
                         
                         # Determine target folders
                         if mode == "Image":
@@ -468,6 +526,9 @@ def main():
                         # Clean up temporary files
                         safe_delete_file(media_temp_path)
                         safe_delete_file(audio_temp_path)
+                        
+                        # Clear recorded audio after successful submission
+                        st.session_state.recorded_audio = None
                         
                         # Success message
                         st.success(f"✅ Successfully uploaded {next_id}!")

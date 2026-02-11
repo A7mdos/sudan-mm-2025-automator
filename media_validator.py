@@ -112,9 +112,28 @@ class MediaValidator:
         Returns:
             Tuple of (is_valid, error_message, duration)
         """
-        # Try mutagen first (pure Python, no ffmpeg required for MP3)
+        # Try Python's wave module for WAV files (built-in, no dependencies)
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.wav':
+            try:
+                import wave
+                with wave.open(file_path, 'rb') as wf:
+                    frames = wf.getnframes()
+                    rate = wf.getframerate()
+                    if rate > 0:
+                        duration = frames / float(rate)
+                        
+                        if duration < min_seconds:
+                            return False, f"Audio duration ({duration:.2f}s) is less than minimum ({min_seconds}s)", duration
+                        if duration > max_seconds:
+                            return False, f"Audio duration ({duration:.2f}s) exceeds maximum ({max_seconds}s)", duration
+                        
+                        return True, None, duration
+            except Exception:
+                pass  # Fall through to other methods
+        
+        # Try mutagen (pure Python, handles MP3, WAV, and other formats)
         try:
-            from mutagen.mp3 import MP3
             from mutagen import File
             
             audio_file = File(file_path)
@@ -130,7 +149,7 @@ class MediaValidator:
         except ImportError:
             # Fallback to ffprobe if mutagen is not available
             pass
-        except Exception as e:
+        except Exception:
             # If mutagen fails, try ffprobe as fallback
             pass
         
@@ -198,7 +217,7 @@ class MediaValidator:
             return False, "File does not exist"
         
         ext = os.path.splitext(file_path)[1].lower()
-        if ext != '.mp3':
-            return False, "Invalid audio format. Only .mp3 is allowed"
+        if ext not in ['.mp3', '.wav']:
+            return False, "Invalid audio format. Allowed: .mp3, .wav"
         
         return True, None
