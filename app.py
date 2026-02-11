@@ -34,6 +34,8 @@ if 'folder_structure' not in st.session_state:
     st.session_state.folder_structure = None
 if 'spreadsheet_id' not in st.session_state:
     st.session_state.spreadsheet_id = None
+if 'username' not in st.session_state:
+    st.session_state.username = None
 
 
 def load_config() -> Dict:
@@ -230,8 +232,33 @@ def main():
         st.success("✅ APIs initialized successfully!")
         st.info("Files will be uploaded to Google Drive and logged in the spreadsheet.")
     
-    # Mode selection
+    # Username prompt (shown once per session)
     st.divider()
+    if not st.session_state.username:
+        st.subheader("👤 Welcome! Please enter your name")
+        with st.form("username_form"):
+            username_input = st.text_input(
+                "Your Name",
+                placeholder="e.g. Ahmed, Fatima, Mohamed...",
+                help="This name will be recorded with every upload you make"
+            )
+            username_submitted = st.form_submit_button("Continue", use_container_width=True)
+            if username_submitted:
+                if username_input.strip():
+                    st.session_state.username = username_input.strip()
+                    st.rerun()
+                else:
+                    st.error("Please enter your name to continue")
+        st.stop()
+    
+    # Show current user with option to change
+    st.caption(f"Uploading as: **{st.session_state.username}** · [Change name](/?change_name=1)")
+    if st.query_params.get("change_name"):
+        st.session_state.username = None
+        st.query_params.clear()
+        st.rerun()
+    
+    # Mode selection
     mode = st.radio(
         "Select Mode",
         ["Image", "Video"],
@@ -427,7 +454,8 @@ def main():
                             msa_caption.strip(),
                             sudanese_caption.strip(),
                             audio_file_link,
-                            category
+                            category,
+                            st.session_state.username
                         ]
                         
                         # Append to spreadsheet
@@ -448,6 +476,7 @@ def main():
                         # Display summary
                         with st.expander("View Submission Details", expanded=True):
                             st.write(f"**ID:** {next_id}")
+                            st.write(f"**Uploaded by:** {st.session_state.username}")
                             st.write(f"**Mode:** {mode}")
                             st.write(f"**Media File:** {media_new_name}")
                             st.write(f"**Audio File:** {audio_new_name}")

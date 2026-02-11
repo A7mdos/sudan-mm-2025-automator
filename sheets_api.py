@@ -149,7 +149,7 @@ class SheetsAPI:
                         'title': 'Images',
                         'gridProperties': {
                             'rowCount': 1000,
-                            'columnCount': 6
+                            'columnCount': 7
                         }
                     }
                 },
@@ -158,7 +158,7 @@ class SheetsAPI:
                         'title': 'Videos',
                         'gridProperties': {
                             'rowCount': 1000,
-                            'columnCount': 6
+                            'columnCount': 7
                         }
                     }
                 }
@@ -173,7 +173,7 @@ class SheetsAPI:
             spreadsheet_id = spreadsheet.get('spreadsheetId')
             
             # Set headers for both sheets
-            headers = ['id', 'file_link', 'msa_caption', 'sudanese_caption', 'audio_file_link', 'category']
+            headers = ['id', 'file_link', 'msa_caption', 'sudanese_caption', 'audio_file_link', 'category', 'uploaded_by']
             self.append_row(spreadsheet_id, 'Images', headers)
             self.append_row(spreadsheet_id, 'Videos', headers)
             
