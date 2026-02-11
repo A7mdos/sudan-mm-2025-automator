@@ -61,48 +61,24 @@ def initialize_apis(config: Dict):
     """Initialize Google Drive and Sheets API clients with OAuth."""
     
     # Check if we're running on Streamlit Cloud (secrets available)
+    # Only the [token] section is required for deployment.
+    # The [oauth_credentials] section is only needed for local re-authentication.
     use_secrets = False
-    secrets_error = None
     try:
-        if hasattr(st, 'secrets'):
-            has_oauth = 'oauth_credentials' in st.secrets
-            has_token = 'token' in st.secrets
-            if has_oauth and has_token:
-                use_secrets = True
-            elif has_oauth or has_token:
-                # Partial secrets - likely a configuration error
-                missing = []
-                if not has_oauth:
-                    missing.append('oauth_credentials')
-                if not has_token:
-                    missing.append('token')
-                secrets_error = f"Partial secrets found. Missing sections: {', '.join(missing)}"
-    except Exception as e:
-        secrets_error = f"Error reading secrets: {str(e)}"
-    
-    if secrets_error:
-        st.warning(f"Streamlit secrets issue: {secrets_error}")
+        if hasattr(st, 'secrets') and 'token' in st.secrets:
+            use_secrets = True
+    except Exception:
+        use_secrets = False
     
     if use_secrets:
-        # Deployment mode - use secrets
+        # Deployment mode - use token from secrets
         try:
-            # Convert Streamlit secrets to regular dicts
-            oauth_creds_raw = st.secrets['oauth_credentials']
-            token_raw = st.secrets['token']
+            # Deep-convert to plain Python dict (handles Streamlit's AttrDict)
+            token_dict = json.loads(json.dumps(dict(st.secrets['token']), default=str))
             
-            # Deep-convert to plain Python dicts (handles Streamlit's AttrDict)
-            oauth_creds_dict = json.loads(json.dumps(dict(oauth_creds_raw), default=str))
-            token_dict = json.loads(json.dumps(dict(token_raw), default=str))
-            
-            # Initialize APIs with secrets
-            drive_api = DriveAPI(
-                credentials_dict=oauth_creds_dict,
-                token_dict=token_dict
-            )
-            sheets_api = SheetsAPI(
-                credentials_dict=oauth_creds_dict,
-                token_dict=token_dict
-            )
+            # Initialize APIs with token only (no oauth_credentials needed on server)
+            drive_api = DriveAPI(token_dict=token_dict)
+            sheets_api = SheetsAPI(token_dict=token_dict)
             
         except Exception as e:
             st.error(f"Failed to initialize with secrets: {str(e)}")
