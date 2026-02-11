@@ -19,7 +19,10 @@ from googleapiclient.errors import HttpError
 class DriveAPI:
     """Wrapper class for Google Drive API operations using OAuth."""
     
-    SCOPES = ['https://www.googleapis.com/auth/drive.file']
+    SCOPES = [
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/spreadsheets'
+    ]
     
     def __init__(self, credentials_path: str = None, token_path: str = 'token.pickle', 
                  credentials_dict: Dict = None, token_dict: Dict = None):
@@ -68,11 +71,12 @@ class DriveAPI:
                         with open(self.token_path, 'wb') as token:
                             pickle.dump(creds, token)
                 except Exception as e:
-                    # If refresh fails in deployment, raise clear error
+                    # If refresh fails in deployment, raise clear error with details
                     if self.token_dict:
                         raise Exception(
-                            "Token expired and could not be refreshed. "
-                            "Please run the token refresh script locally and update Streamlit secrets."
+                            f"Token expired and could not be refreshed. "
+                            f"Google error: {str(e)}. "
+                            f"Please run the token refresh script locally and update Streamlit secrets."
                         )
                     # If refresh fails locally, delete token and re-authenticate
                     if os.path.exists(self.token_path):
@@ -104,7 +108,11 @@ class DriveAPI:
                     else:
                         flow = InstalledAppFlow.from_client_secrets_file(self.credentials_path, self.SCOPES)
                     
-                    creds = flow.run_local_server(port=0)
+                    creds = flow.run_local_server(
+                        port=0,
+                        access_type='offline',
+                        prompt='consent'
+                    )
                 except Exception as e:
                     raise Exception(
                         f"Failed to authenticate. Make sure you have created OAuth credentials.\n"

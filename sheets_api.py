@@ -18,8 +18,8 @@ class SheetsAPI:
     """Wrapper class for Google Sheets API operations using OAuth."""
     
     SCOPES = [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive.file'
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/spreadsheets'
     ]
     
     def __init__(self, credentials_path: str = None, token_path: str = 'token.pickle',
@@ -69,11 +69,12 @@ class SheetsAPI:
                         with open(self.token_path, 'wb') as token:
                             pickle.dump(creds, token)
                 except Exception as e:
-                    # If refresh fails in deployment, raise clear error
+                    # If refresh fails in deployment, raise clear error with details
                     if self.token_dict:
                         raise Exception(
-                            "Token expired and could not be refreshed. "
-                            "Please run the token refresh script locally and update Streamlit secrets."
+                            f"Token expired and could not be refreshed. "
+                            f"Google error: {str(e)}. "
+                            f"Please run the token refresh script locally and update Streamlit secrets."
                         )
                     # If refresh fails locally, we can't re-authenticate from here
                     raise Exception(f"Authentication failed: {str(e)}")

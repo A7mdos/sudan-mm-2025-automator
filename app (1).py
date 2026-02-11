@@ -61,38 +61,13 @@ def initialize_apis(config: Dict):
     """Initialize Google Drive and Sheets API clients with OAuth."""
     
     # Check if we're running on Streamlit Cloud (secrets available)
-    use_secrets = False
-    secrets_error = None
-    try:
-        if hasattr(st, 'secrets'):
-            has_oauth = 'oauth_credentials' in st.secrets
-            has_token = 'token' in st.secrets
-            if has_oauth and has_token:
-                use_secrets = True
-            elif has_oauth or has_token:
-                # Partial secrets - likely a configuration error
-                missing = []
-                if not has_oauth:
-                    missing.append('oauth_credentials')
-                if not has_token:
-                    missing.append('token')
-                secrets_error = f"Partial secrets found. Missing sections: {', '.join(missing)}"
-    except Exception as e:
-        secrets_error = f"Error reading secrets: {str(e)}"
-    
-    if secrets_error:
-        st.warning(f"Streamlit secrets issue: {secrets_error}")
+    use_secrets = hasattr(st, 'secrets') and 'oauth_credentials' in st.secrets and 'token' in st.secrets
     
     if use_secrets:
         # Deployment mode - use secrets
         try:
-            # Convert Streamlit secrets to regular dicts
-            oauth_creds_raw = st.secrets['oauth_credentials']
-            token_raw = st.secrets['token']
-            
-            # Deep-convert to plain Python dicts (handles Streamlit's AttrDict)
-            oauth_creds_dict = json.loads(json.dumps(dict(oauth_creds_raw), default=str))
-            token_dict = json.loads(json.dumps(dict(token_raw), default=str))
+            oauth_creds_dict = dict(st.secrets['oauth_credentials'])
+            token_dict = dict(st.secrets['token'])
             
             # Initialize APIs with secrets
             drive_api = DriveAPI(
